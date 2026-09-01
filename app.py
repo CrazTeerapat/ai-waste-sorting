@@ -1,7 +1,9 @@
 import streamlit as st
 import google.generativeai as genai
 from PIL import Image
+import io
 import re
+import time
 
 # =====================================================
 # PAGE CONFIG
@@ -14,31 +16,72 @@ st.set_page_config(
 )
 
 # =====================================================
-# GEMINI SETUP
+# API KEY
 # =====================================================
 
 api_key = st.secrets.get("GEMINI_API_KEY", "")
 
 if not api_key:
-    st.error("⚠️ กรุณาตั้งค่า GEMINI_API_KEY ใน Streamlit Secrets")
+    st.error("⚠️ กรุณาตั้งค่า GEMINI_API_KEY ใน Secrets")
     st.stop()
 
 genai.configure(api_key=api_key)
 
 
+# =====================================================
+# หา MODEL ที่เร็วที่สุดที่ ACCOUNT ใช้ได้
+# =====================================================
+
 @st.cache_resource
-def load_model():
-    return genai.GenerativeModel(
-        "gemini-3.6-flash",
+def get_fast_model():
+
+    models = []
+
+    for m in genai.list_models():
+
+        if "generateContent" in m.supported_generation_methods:
+            models.append(m.name.replace("models/", ""))
+
+    # เรียงลำดับความต้องการ
+    preferred_keywords = [
+        "flash-lite",
+        "flash"
+    ]
+
+    selected = None
+
+    for keyword in preferred_keywords:
+
+        for name in models:
+
+            if keyword in name.lower():
+
+                # ไม่เลือก 2.0 เพราะ account คุณใช้ไม่ได้
+                if "2.0" not in name.lower():
+
+                    selected = name
+                    break
+
+        if selected:
+            break
+
+    if not selected:
+        raise Exception(
+            "ไม่พบ Gemini Flash model ที่รองรับ generateContent"
+        )
+
+    model = genai.GenerativeModel(
+        selected,
         generation_config={
             "temperature": 0,
-            # สำคัญ: อย่าตั้งต่ำเกินไป
-            "max_output_tokens": 1024
+            "max_output_tokens": 256
         }
     )
 
+    return model, selected
 
-model = load_model()
+
+model, model_name = get_fast_model()
 
 
 # =====================================================
@@ -47,13 +90,12 @@ model = load_model()
 
 st.title("🗑️ AI แยกขยะ")
 
-st.write(
-    "📷 ถ่ายหรืออัปโหลดภาพขยะ "
-    "AI จะบอกว่าต้องทิ้งลงถังไหน"
+st.caption(
+    "📷 ถ่ายภาพขยะ แล้วระบบจะบอกว่าต้องทิ้งถังไหน"
 )
 
 upload_method = st.radio(
-    "เลือกวิธี:",
+    "เลือกวิธี",
     [
         "📸 ถ่ายรูป",
         "📁 อัปโหลดไฟล์"
@@ -62,26 +104,26 @@ upload_method = st.radio(
 )
 
 
+# =====================================================
+# UPLOAD
+# =====================================================
+
 if upload_method == "📸 ถ่ายรูป":
 
     uploaded_file = st.camera_input(
-        "ถ่ายภาพขยะ"
+        "ถ่ายภาพ"
     )
 
 else:
 
     uploaded_file = st.file_uploader(
-        "อัปโหลดภาพขยะ",
-        type=[
-            "jpg",
-            "jpeg",
-            "png"
-        ]
+        "อัปโหลดภาพ",
+        type=["jpg", "jpeg", "png"]
     )
 
 
 # =====================================================
-# IMAGE
+# ANALYZE
 # =====================================================
 
 if uploaded_file is not None:
@@ -92,14 +134,8 @@ if uploaded_file is not None:
 
     st.image(
         image,
-        caption="ภาพที่ต้องการตรวจสอบ",
-        width=300
+        width=280
     )
-
-
-    # =================================================
-    # BUTTON
-    # =================================================
 
     if st.button(
         "🔍 ตรวจสอบถังขยะ",
@@ -107,226 +143,183 @@ if uploaded_file is not None:
         use_container_width=True
     ):
 
-        with st.spinner(
-            "🤖 กำลังตรวจสอบ..."
-        ):
+        start_time = time.time()
+
+        try:
+
+            # =================================================
+            # ลดภาพเหลือ 256px
+            # =================================================
+
+            ai_image = image.copy()
+
+            ai_image.thumbnail(
+                (256, 256),
+                Image.Resampling.BILINEAR
+            )
+
+            # =================================================
+            # JPEG COMPRESS
+            # =================================================
+
+            buffer = io.BytesIO()
+
+            ai_image.save(
+                buffer,
+                format="JPEG",
+                quality=55,
+                optimize=False
+            )
+
+            buffer.seek(0)
+
+            # เปิดกลับเป็น PIL
+            ai_image_small = Image.open(
+                buffer
+            )
+
+
+            # =================================================
+            # PROMPT สั้นที่สุด
+            # =================================================
+
+            prompt = """
+Classify the main waste item.
+
+1=recycle
+2=general waste
+3=food/organic
+4=hazardous
+
+Return ONLY 1, 2, 3 or 4.
+"""
+
+
+            # =================================================
+            # GEMINI
+            # =================================================
+
+            response = model.generate_content(
+                [
+                    prompt,
+                    ai_image_small
+                ]
+            )
+
+
+            # =================================================
+            # GET RESULT
+            # =================================================
+
+            text = ""
 
             try:
+                text = response.text.strip()
+            except:
+                pass
 
-                # =====================================
-                # RESIZE IMAGE
-                # =====================================
 
-                ai_image = image.copy()
+            # =================================================
+            # หาเลข 1-4
+            # =================================================
 
-                ai_image.thumbnail(
-                    (512, 512),
-                    Image.Resampling.LANCZOS
-                )
+            match = re.search(
+                r"[1-4]",
+                text
+            )
 
-
-                # =====================================
-                # VERY SHORT PROMPT
-                # =====================================
-
-                prompt = """
-ดูขยะหลักในภาพ แล้วเลือกหมายเลขถังที่ถูกต้องที่สุด
-
-1 = รีไซเคิล
-2 = ขยะทั่วไป
-3 = ขยะอินทรีย์หรือเศษอาหาร
-4 = ขยะอันตราย
-
-ตอบเพียงหมายเลข 1, 2, 3 หรือ 4 เท่านั้น
-"""
-
-
-                # =====================================
-                # CALL GEMINI
-                # =====================================
-
-                response = model.generate_content(
-                    [
-                        prompt,
-                        ai_image
-                    ]
-                )
-
-
-                # =====================================
-                # GET RESPONSE
-                # =====================================
-
-                result_text = ""
-
-                try:
-                    result_text = response.text.strip()
-                except Exception:
-                    pass
-
-
-                # =====================================
-                # EMPTY RESPONSE
-                # =====================================
-
-                if not result_text:
-
-                    finish_reason = "UNKNOWN"
-
-                    try:
-                        finish_reason = str(
-                            response.candidates[0].finish_reason
-                        )
-                    except Exception:
-                        pass
-
-                    st.error(
-                        "❌ AI วิเคราะห์แล้ว "
-                        "แต่ไม่ได้ส่งผลลัพธ์กลับมา"
-                    )
-
-                    st.caption(
-                        f"Finish reason: {finish_reason}"
-                    )
-
-                    st.stop()
-
-
-                # =====================================
-                # FIND 1 / 2 / 3 / 4
-                # =====================================
-
-                match = re.search(
-                    r"\b([1-4])\b",
-                    result_text
-                )
-
-
-                if match:
-
-                    result = match.group(1)
-
-                else:
-
-                    # กรณี AI ตอบเป็นคำแทนเลข
-                    text_upper = result_text.upper()
-
-                    if "GREEN" in text_upper:
-                        result = "1"
-
-                    elif "BLUE" in text_upper:
-                        result = "2"
-
-                    elif "YELLOW" in text_upper:
-                        result = "3"
-
-                    elif "RED" in text_upper:
-                        result = "4"
-
-                    elif "รีไซเคิล" in result_text:
-                        result = "1"
-
-                    elif "ทั่วไป" in result_text:
-                        result = "2"
-
-                    elif (
-                        "อินทรีย์" in result_text
-                        or "เศษอาหาร" in result_text
-                    ):
-                        result = "3"
-
-                    elif "อันตราย" in result_text:
-                        result = "4"
-
-                    else:
-                        result = None
-
-
-                # =====================================
-                # SHOW RESULT
-                # =====================================
-
-                st.divider()
-
-
-                # ---------- RECYCLE ----------
-                if result == "1":
-
-                    st.success(
-                        "♻️ ต้องทิ้งถังขยะรีไซเคิล"
-                    )
-
-                    st.markdown(
-                        """
-## 🟢 ถังขยะรีไซเคิล
-
-เทของเหลวออก และล้างก่อนทิ้งถ้าสามารถทำได้
-"""
-                    )
-
-
-                # ---------- GENERAL ----------
-                elif result == "2":
-
-                    st.info(
-                        "🗑️ ต้องทิ้งถังขยะทั่วไป"
-                    )
-
-                    st.markdown(
-                        """
-## 🔵 ถังขยะทั่วไป
-
-ทิ้งลงถังขยะทั่วไป
-"""
-                    )
-
-
-                # ---------- ORGANIC ----------
-                elif result == "3":
-
-                    st.warning(
-                        "🍌 ต้องทิ้งถังขยะอินทรีย์"
-                    )
-
-                    st.markdown(
-                        """
-## 🟡 ถังขยะอินทรีย์ / เศษอาหาร
-
-แยกบรรจุภัณฑ์ที่ไม่ใช่อาหารออกก่อนทิ้ง
-"""
-                    )
-
-
-                # ---------- HAZARDOUS ----------
-                elif result == "4":
-
-                    st.error(
-                        "⚠️ ต้องทิ้งถังขยะอันตราย"
-                    )
-
-                    st.markdown(
-                        """
-## 🔴 ถังขยะอันตราย
-
-ห้ามทิ้งรวมกับขยะทั่วไป
-"""
-                    )
-
-
-                # ---------- UNKNOWN ----------
-                else:
-
-                    st.error(
-                        "❌ ไม่สามารถระบุถังขยะได้"
-                    )
-
-                    st.caption(
-                        f"AI Response: {result_text}"
-                    )
-
-
-            except Exception as e:
+            if not match:
 
                 st.error(
-                    f"❌ เกิดข้อผิดพลาด: {str(e)}"
+                    "❌ AI ไม่สามารถจำแนกได้"
                 )
+
+                st.caption(
+                    f"Response: {text}"
+                )
+
+                st.stop()
+
+
+            result = match.group()
+
+
+            # =================================================
+            # CALCULATE TIME
+            # =================================================
+
+            elapsed = (
+                time.time() - start_time
+            )
+
+
+            # =================================================
+            # RESULT
+            # =================================================
+
+            if result == "1":
+
+                st.success(
+                    "♻️ ทิ้งถังรีไซเคิล"
+                )
+
+                st.markdown(
+                    """
+# 🟢 รีไซเคิล
+**เทของเหลวออกก่อนทิ้ง**
+"""
+                )
+
+
+            elif result == "2":
+
+                st.info(
+                    "🗑️ ทิ้งถังขยะทั่วไป"
+                )
+
+                st.markdown(
+                    """
+# 🔵 ขยะทั่วไป
+"""
+                )
+
+
+            elif result == "3":
+
+                st.warning(
+                    "🍌 ทิ้งถังขยะอินทรีย์"
+                )
+
+                st.markdown(
+                    """
+# 🟡 ขยะอินทรีย์
+**แยกบรรจุภัณฑ์ออกก่อน**
+"""
+                )
+
+
+            elif result == "4":
+
+                st.error(
+                    "⚠️ ทิ้งถังขยะอันตราย"
+                )
+
+                st.markdown(
+                    """
+# 🔴 ขยะอันตราย
+**ห้ามทิ้งรวมกับขยะทั่วไป**
+"""
+                )
+
+
+            # เวลาใช้จริง
+            st.caption(
+                f"⚡ วิเคราะห์ {elapsed:.2f} วินาที | {model_name}"
+            )
+
+
+        except Exception as e:
+
+            st.error(
+                f"❌ Error: {str(e)}"
+            )
