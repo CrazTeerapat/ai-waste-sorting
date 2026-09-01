@@ -28,7 +28,7 @@ genai.configure(api_key=api_key)
 @st.cache_resource
 def load_model():
     return genai.GenerativeModel(
-        "gemini-2.0-flash",
+        "gemini-3.6-flash",
         generation_config={
             "temperature": 0,
             "max_output_tokens": 10
