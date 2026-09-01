@@ -15,25 +15,25 @@ st.set_page_config(
 )
 
 # =====================================================
-# GEMINI
+# GEMINI SETUP
 # =====================================================
 api_key = st.secrets.get("GEMINI_API_KEY", "")
 
 if not api_key:
-    st.error("⚠️ กรุณาตั้งค่า GEMINI_API_KEY")
+    st.error("⚠️ กรุณาตั้งค่า GEMINI_API_KEY ใน Secrets")
     st.stop()
 
 genai.configure(api_key=api_key)
 
 # =====================================================
 # MODEL
-# ใช้ตัวที่คุณทดสอบแล้วว่าใช้งานได้
 # =====================================================
+# ใช้ model ที่คุณใช้งานได้อยู่
 MODEL_NAME = "gemini-3.6-flash"
+
 
 @st.cache_resource
 def load_model():
-
     return genai.GenerativeModel(
         MODEL_NAME,
         generation_config={
@@ -42,7 +42,9 @@ def load_model():
         }
     )
 
+
 model = load_model()
+
 
 # =====================================================
 # GEMINI FUNCTION
@@ -50,27 +52,42 @@ model = load_model()
 def analyze_waste(ai_image):
 
     prompt = """
-Classify the MAIN waste item.
+Look at the MAIN waste object in the image.
+
+Identify the object and choose its waste category.
 
 1 = RECYCLABLE
-plastic bottle, glass bottle, can, paper, cardboard
+Examples: plastic bottle, plastic container, glass bottle,
+glass jar, aluminum can, metal can, paper, cardboard.
 
 2 = GENERAL WASTE
-tissue, wrapper, plastic bag, foam, dirty packaging
+Examples: tissue, napkin, snack wrapper, plastic film,
+plastic bag, foam, dirty packaging, non-recyclable waste.
 
 3 = ORGANIC
-food, fruit, vegetables, leftovers
+Examples: food, leftover food, fruit, vegetable,
+fruit peel, food scraps.
 
 4 = HAZARDOUS
-battery, electronics, bulb, chemical, aerosol
+Examples: battery, electronic waste, light bulb,
+chemical container, aerosol can, hazardous material.
 
 Rules:
-clean recyclable material = 1
-dirty packaging = 2
-food = 3
-battery/electronic/chemical = 4
+Clean recyclable material = 1
+Dirty or contaminated packaging = 2
+Food = 3
+Battery/electronic/chemical = 4
 
-Return ONLY 1, 2, 3 or 4.
+Reply ONLY in this format:
+
+object|number
+
+Examples:
+plastic bottle|1
+banana peel|3
+battery|4
+
+No explanation.
 """
 
     response = model.generate_content([
@@ -87,10 +104,11 @@ Return ONLY 1, 2, 3 or 4.
 st.title("🗑️ AI แยกขยะ")
 
 st.write(
-    "📷 ถ่ายภาพขยะ แล้ว AI จะบอกว่าต้องทิ้งถังไหน"
+    "📷 ถ่ายหรืออัปโหลดภาพขยะ "
+    "AI จะบอกว่าเห็นเป็นอะไร และต้องทิ้งถังไหน"
 )
 
-method = st.radio(
+upload_method = st.radio(
     "เลือกวิธี:",
     [
         "📸 ถ่ายรูป",
@@ -99,18 +117,27 @@ method = st.radio(
     horizontal=True
 )
 
-if method == "📸 ถ่ายรูป":
+
+# =====================================================
+# IMAGE INPUT
+# =====================================================
+if upload_method == "📸 ถ่ายรูป":
 
     uploaded_file = st.camera_input(
-        "ถ่ายภาพ"
+        "ถ่ายภาพขยะ"
     )
 
 else:
 
     uploaded_file = st.file_uploader(
-        "อัปโหลดภาพ",
-        type=["jpg", "jpeg", "png"]
+        "อัปโหลดภาพขยะ",
+        type=[
+            "jpg",
+            "jpeg",
+            "png"
+        ]
     )
+
 
 # =====================================================
 # IMAGE
@@ -123,11 +150,12 @@ if uploaded_file is not None:
 
     st.image(
         image,
+        caption="ภาพที่ต้องการตรวจสอบ",
         width=300
     )
 
     # =================================================
-    # BUTTON
+    # ANALYZE BUTTON
     # =================================================
     if st.button(
         "🔍 ตรวจสอบถังขยะ",
@@ -135,11 +163,12 @@ if uploaded_file is not None:
         use_container_width=True
     ):
 
-        start = time.time()
+        start_time = time.time()
 
         # =============================================
         # RESIZE
         # =============================================
+        # 256px เพื่อเน้นความเร็ว
         ai_image = image.copy()
 
         ai_image.thumbnail(
@@ -148,7 +177,7 @@ if uploaded_file is not None:
         )
 
         # =============================================
-        # CALL GEMINI + TIMEOUT
+        # CALL GEMINI
         # =============================================
         try:
 
@@ -167,9 +196,7 @@ if uploaded_file is not None:
 
                 try:
 
-                    # ---------------------------------
                     # สูงสุด 8 วินาที
-                    # ---------------------------------
                     text = future.result(
                         timeout=8
                     )
@@ -183,7 +210,11 @@ if uploaded_file is not None:
                     )
 
                     st.error(
-                        "⏱️ AI ใช้เวลานานเกินไป กรุณาลองใหม่"
+                        "⏱️ AI ใช้เวลานานเกิน 8 วินาที"
+                    )
+
+                    st.info(
+                        "กรุณากดตรวจสอบอีกครั้ง"
                     )
 
                     st.stop()
@@ -195,40 +226,86 @@ if uploaded_file is not None:
         except Exception as e:
 
             st.error(
-                f"❌ Error: {e}"
+                f"❌ Error: {str(e)}"
             )
 
             st.stop()
 
-        # =============================================
-        # READ RESULT
-        # =============================================
+        # =================================================
+        # READ RESPONSE
+        # =================================================
+
+        text = text.strip()
+
+        # Gemini ควรตอบ object|number
+        if "|" not in text:
+
+            st.error(
+                "❌ AI ตอบกลับไม่ตรงรูปแบบ"
+            )
+
+            st.caption(
+                f"AI Response: {text}"
+            )
+
+            st.stop()
+
+        # แยก object และ category
+        parts = text.split("|", 1)
+
+        object_name = parts[0].strip()
+
+        category_text = parts[1].strip()
+
+        # หาเลข 1-4
         match = re.search(
-            r"\b([1-4])\b",
-            text
+            r"[1-4]",
+            category_text
         )
 
         if not match:
 
             st.error(
-                "❌ AI ไม่สามารถจำแนกขยะได้"
+                "❌ AI ไม่สามารถระบุประเภทถังได้"
             )
 
             st.caption(
-                f"Response: {text}"
+                f"AI Response: {text}"
             )
 
             st.stop()
 
-        result = match.group(1)
+        result = match.group(0)
 
-        elapsed = time.time() - start
+        # =================================================
+        # TIME
+        # =================================================
 
-        # =============================================
-        # RESULT
-        # =============================================
+        elapsed = time.time() - start_time
+
+        # =================================================
+        # SHOW WHAT AI SAW
+        # =================================================
+
         st.divider()
 
+        st.markdown(
+            "### 👁️ AI เห็นเป็น"
+        )
+
+        st.markdown(
+            f"## {object_name.title()}"
+        )
+
+        st.divider()
+
+        # =================================================
+        # RESULT
+        # =================================================
+
+        # -------------------------------------------------
+        # RECYCLABLE
+        # -------------------------------------------------
         if result == "1":
 
             st.success(
@@ -239,10 +316,16 @@ if uploaded_file is not None:
                 """
 # 🟢 RECYCLABLE
 
-**เทของเหลวออกก่อนทิ้ง**
+### ถังขยะรีไซเคิล
+
+เทของเหลวออกก่อนทิ้ง  
+หากสกปรกควรล้างก่อน
 """
             )
 
+        # -------------------------------------------------
+        # GENERAL
+        # -------------------------------------------------
         elif result == "2":
 
             st.info(
@@ -252,9 +335,14 @@ if uploaded_file is not None:
             st.markdown(
                 """
 # 🔵 GENERAL WASTE
+
+### ถังขยะทั่วไป
 """
             )
 
+        # -------------------------------------------------
+        # ORGANIC
+        # -------------------------------------------------
         elif result == "3":
 
             st.warning(
@@ -265,10 +353,15 @@ if uploaded_file is not None:
                 """
 # 🟡 ORGANIC WASTE
 
-**แยกบรรจุภัณฑ์ออกก่อนทิ้ง**
+### ถังขยะอินทรีย์
+
+แยกบรรจุภัณฑ์ออกก่อนทิ้ง
 """
             )
 
+        # -------------------------------------------------
+        # HAZARDOUS
+        # -------------------------------------------------
         elif result == "4":
 
             st.error(
@@ -279,13 +372,19 @@ if uploaded_file is not None:
                 """
 # 🔴 HAZARDOUS WASTE
 
-**ห้ามทิ้งรวมกับขยะทั่วไป**
+### ถังขยะอันตราย
+
+ห้ามทิ้งรวมกับขยะทั่วไป
 """
             )
 
-        # =============================================
+        # =================================================
         # SPEED
-        # =============================================
+        # =================================================
+
+        st.divider()
+
         st.caption(
-            f"⚡ วิเคราะห์ {elapsed:.2f} วินาที"
+            f"⚡ วิเคราะห์ {elapsed:.2f} วินาที "
+            f"| {MODEL_NAME}"
         )
