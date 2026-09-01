@@ -7,7 +7,7 @@ import os
 api_key = st.secrets.get("GEMINI_API_KEY", "")
 if api_key:
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-3.6-flash')
 else:
     st.error("⚠️ กรุณาตั้งค่า GEMINI_API_KEY ใน Secrets")
     st.stop()
