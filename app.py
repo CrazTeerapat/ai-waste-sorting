@@ -3,35 +3,7 @@ import google.generativeai as genai
 from PIL import Image
 
 # =========================
-# CONFIG GEMINI
-# =========================
-
-api_key = st.secrets.get("GEMINI_API_KEY", "")
-
-if not api_key:
-    st.error("⚠️ กรุณาตั้งค่า GEMINI_API_KEY ใน Streamlit Secrets")
-    st.stop()
-
-genai.configure(api_key=api_key)
-
-
-# Cache model เพื่อไม่ให้สร้างใหม่ทุกครั้ง
-@st.cache_resource
-def load_model():
-    return genai.GenerativeModel(
-        "gemini-3.6-flash",
-        generation_config={
-            "temperature": 0.1,
-            "max_output_tokens": 150,
-        }
-    )
-
-
-model = load_model()
-
-
-# =========================
-# PAGE UI
+# PAGE CONFIG
 # =========================
 
 st.set_page_config(
@@ -40,29 +12,49 @@ st.set_page_config(
     layout="centered"
 )
 
+# =========================
+# GEMINI SETUP
+# =========================
+
+api_key = st.secrets.get("GEMINI_API_KEY", "")
+
+if not api_key:
+    st.error("⚠️ กรุณาตั้งค่า GEMINI_API_KEY ใน Secrets")
+    st.stop()
+
+genai.configure(api_key=api_key)
+
+
+@st.cache_resource
+def load_model():
+    return genai.GenerativeModel(
+        "gemini-2.0-flash",
+        generation_config={
+            "temperature": 0,
+            "max_output_tokens": 10
+        }
+    )
+
+
+model = load_model()
+
+
+# =========================
+# UI
+# =========================
+
 st.title("🗑️ AI แยกขยะ")
 
 st.write(
-    "📷 ถ่ายหรืออัปโหลดภาพขยะ "
-    "แล้ว AI จะบอกว่าต้องทิ้งลงถังไหน"
+    "📷 ถ่ายหรืออัปโหลดภาพ "
+    "AI จะบอกว่าต้องทิ้งลงถังไหน"
 )
-
-
-# =========================
-# UPLOAD METHOD
-# =========================
 
 upload_method = st.radio(
     "เลือกวิธี:",
-    [
-        "📸 ถ่ายรูป",
-        "📁 อัปโหลดไฟล์"
-    ],
+    ["📸 ถ่ายรูป", "📁 อัปโหลดไฟล์"],
     horizontal=True
 )
-
-
-uploaded_file = None
 
 
 if upload_method == "📸 ถ่ายรูป":
@@ -75,11 +67,7 @@ else:
 
     uploaded_file = st.file_uploader(
         "อัปโหลดภาพขยะ",
-        type=[
-            "jpg",
-            "jpeg",
-            "png"
-        ]
+        type=["jpg", "jpeg", "png"]
     )
 
 
@@ -96,132 +84,144 @@ if uploaded_file is not None:
     st.image(
         image,
         caption="ภาพที่ต้องการตรวจสอบ",
-        width=350
+        width=300
     )
 
-
-    # =========================
-    # ANALYZE BUTTON
-    # =========================
-
     if st.button(
-        "🔍 ตรวจสอบว่าต้องทิ้งถังไหน",
+        "🔍 ตรวจสอบถังขยะ",
         type="primary",
         use_container_width=True
     ):
 
-        with st.spinner(
-            "🤖 กำลังตรวจสอบ..."
-        ):
+        with st.spinner("กำลังตรวจสอบ..."):
 
             try:
 
-                # =========================
-                # ลดขนาดรูป
-                # =========================
+                # -------------------------
+                # ลดรูปให้เล็กมากขึ้น
+                # -------------------------
 
                 ai_image = image.copy()
 
                 ai_image.thumbnail(
-                    (800, 800),
+                    (512, 512),
                     Image.Resampling.LANCZOS
                 )
 
 
-                # =========================
-                # PROMPT
-                # =========================
+                # -------------------------
+                # PROMPT สั้นมาก
+                # -------------------------
 
                 prompt = """
-คุณคือ AI สำหรับช่วยแยกขยะ
+ดูขยะหลักในภาพและเลือกถังที่เหมาะสมที่สุด
 
-ดูสิ่งของหรือขยะหลักในภาพ
-แล้วตัดสินใจว่าควรทิ้งลงถังขยะประเภทใด
+GREEN = ขยะรีไซเคิล
+BLUE = ขยะทั่วไป
+YELLOW = ขยะอินทรีย์/เศษอาหาร
+RED = ขยะอันตราย
 
-ให้เลือกเพียง 1 ถังจากรายการนี้:
-
-🟢 ถังขยะรีไซเคิล
-สำหรับ:
-- ขวดพลาสติก
-- กระป๋อง
-- ขวดแก้ว
-- กระดาษ
-- กล่องกระดาษ
-- วัสดุที่สามารถนำกลับมาใช้ใหม่ได้
-
-🔵 ถังขยะทั่วไป
-สำหรับ:
-- ซองขนม
-- ถุงพลาสติกเปื้อน
-- โฟม
-- ทิชชู่
-- ขยะที่ไม่สามารถรีไซเคิลได้
-
-🟡 ถังขยะอินทรีย์
-สำหรับ:
-- เศษอาหาร
-- ผัก
-- ผลไม้
-- ใบไม้
-- ขยะที่ย่อยสลายได้
-
-🔴 ถังขยะอันตราย
-สำหรับ:
-- แบตเตอรี่
-- ถ่านไฟฉาย
-- หลอดไฟ
-- กระป๋องสารเคมี
-- ภาชนะสารเคมี
-- อุปกรณ์อิเล็กทรอนิกส์บางประเภท
-
-
-ตอบภาษาไทยสั้นๆ เท่านั้น
-
-รูปแบบคำตอบ:
-
-### 🗑️ ต้องทิ้งที่
-[ชื่อถัง]
-
-### ✅ ก่อนทิ้ง
-[คำแนะนำสั้นๆ ไม่เกิน 1 ประโยค]
-
-
-ข้อกำหนด:
-- เลือกถังเพียง 1 ถัง
-- เน้นว่าต้องทิ้งถังไหน
-- ไม่ต้องบอกชื่อขยะ
-- ไม่ต้องอธิบายเหตุผลยาว
-- ถ้าไม่แน่ใจ ให้เลือกถังที่ปลอดภัยและเหมาะสมที่สุด
+ตอบเพียงคำเดียวเท่านั้น:
+GREEN
+BLUE
+YELLOW
+หรือ RED
 """
 
 
-                # =========================
-                # CALL GEMINI
-                # =========================
+                # -------------------------
+                # GEMINI
+                # -------------------------
 
                 response = model.generate_content(
-                    [
-                        prompt,
-                        ai_image
-                    ]
+                    [prompt, ai_image]
                 )
 
 
-                # =========================
-                # RESULT
-                # =========================
+                # -------------------------
+                # ดึงผลลัพธ์อย่างปลอดภัย
+                # -------------------------
 
-                st.success(
-                    "✅ ตรวจสอบเรียบร้อย"
-                )
+                result = ""
 
-                st.markdown(
-                    response.text
-                )
+                try:
+                    result = response.text.strip().upper()
+                except:
+                    pass
+
+
+                # Debug กรณีไม่มีข้อความ
+                if not result:
+                    st.error("AI วิเคราะห์แล้ว แต่ไม่ได้ส่งผลลัพธ์กลับมา")
+                    st.write(response)
+                    st.stop()
+
+
+                # -------------------------
+                # แสดงผล
+                # -------------------------
+
+                if "GREEN" in result:
+
+                    st.success("♻️ ทิ้งถังขยะรีไซเคิล")
+
+                    st.markdown(
+                        """
+                        ### 🟢 ถังขยะรีไซเคิล
+
+                        ล้างหรือเทของเหลวออกก่อนทิ้ง หากสามารถทำได้
+                        """
+                    )
+
+
+                elif "BLUE" in result:
+
+                    st.info("🗑️ ทิ้งถังขยะทั่วไป")
+
+                    st.markdown(
+                        """
+                        ### 🔵 ถังขยะทั่วไป
+
+                        ทิ้งได้โดยไม่ต้องแยกเพื่อรีไซเคิล
+                        """
+                    )
+
+
+                elif "YELLOW" in result:
+
+                    st.warning("🍌 ทิ้งถังขยะอินทรีย์")
+
+                    st.markdown(
+                        """
+                        ### 🟡 ถังขยะอินทรีย์ / เศษอาหาร
+
+                        เทของเหลวและแยกบรรจุภัณฑ์ออกก่อน
+                        """
+                    )
+
+
+                elif "RED" in result:
+
+                    st.error("⚠️ ทิ้งถังขยะอันตราย")
+
+                    st.markdown(
+                        """
+                        ### 🔴 ถังขยะอันตราย
+
+                        ห้ามทิ้งรวมกับขยะทั่วไป
+                        """
+                    )
+
+
+                else:
+
+                    st.warning(
+                        f"AI ตอบกลับ: {result}"
+                    )
 
 
             except Exception as e:
 
                 st.error(
-                    f"❌ เกิดข้อผิดพลาด: {str(e)}"
+                    f"❌ Error: {e}"
                 )
