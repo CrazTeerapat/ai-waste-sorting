@@ -5,7 +5,6 @@ from PIL import Image
 # =========================
 # PAGE CONFIG
 # =========================
-
 st.set_page_config(
     page_title="AI แยกขยะ",
     page_icon="🗑️",
@@ -15,7 +14,6 @@ st.set_page_config(
 # =========================
 # GEMINI SETUP
 # =========================
-
 api_key = st.secrets.get("GEMINI_API_KEY", "")
 
 if not api_key:
@@ -31,7 +29,7 @@ def load_model():
         "gemini-3.6-flash",
         generation_config={
             "temperature": 0,
-            "max_output_tokens": 10
+            "max_output_tokens": 100
         }
     )
 
@@ -42,13 +40,8 @@ model = load_model()
 # =========================
 # UI
 # =========================
-
 st.title("🗑️ AI แยกขยะ")
-
-st.write(
-    "📷 ถ่ายหรืออัปโหลดภาพ "
-    "AI จะบอกว่าต้องทิ้งลงถังไหน"
-)
+st.write("📷 ถ่ายหรืออัปโหลดภาพ แล้ว AI จะบอกว่าต้องทิ้งลงถังไหน")
 
 upload_method = st.radio(
     "เลือกวิธี:",
@@ -56,15 +49,9 @@ upload_method = st.radio(
     horizontal=True
 )
 
-
 if upload_method == "📸 ถ่ายรูป":
-
-    uploaded_file = st.camera_input(
-        "ถ่ายภาพขยะ"
-    )
-
+    uploaded_file = st.camera_input("ถ่ายภาพขยะ")
 else:
-
     uploaded_file = st.file_uploader(
         "อัปโหลดภาพขยะ",
         type=["jpg", "jpeg", "png"]
@@ -72,14 +59,11 @@ else:
 
 
 # =========================
-# IMAGE
+# IMAGE + ANALYZE
 # =========================
-
 if uploaded_file is not None:
 
-    image = Image.open(
-        uploaded_file
-    ).convert("RGB")
+    image = Image.open(uploaded_file).convert("RGB")
 
     st.image(
         image,
@@ -96,11 +80,9 @@ if uploaded_file is not None:
         with st.spinner("กำลังตรวจสอบ..."):
 
             try:
-
                 # -------------------------
-                # ลดรูปให้เล็กมากขึ้น
+                # ลดขนาดภาพเพื่อให้เร็วขึ้น
                 # -------------------------
-
                 ai_image = image.copy()
 
                 ai_image.thumbnail(
@@ -108,120 +90,133 @@ if uploaded_file is not None:
                     Image.Resampling.LANCZOS
                 )
 
-
                 # -------------------------
-                # PROMPT สั้นมาก
+                # PROMPT สั้น
                 # -------------------------
-
                 prompt = """
-ดูขยะหลักในภาพและเลือกถังที่เหมาะสมที่สุด
+เลือกถังที่เหมาะสมสำหรับขยะหลักในภาพ
 
 GREEN = ขยะรีไซเคิล
 BLUE = ขยะทั่วไป
-YELLOW = ขยะอินทรีย์/เศษอาหาร
+YELLOW = ขยะอินทรีย์ / เศษอาหาร
 RED = ขยะอันตราย
 
-ตอบเพียงคำเดียวเท่านั้น:
+ตอบเพียงคำเดียว:
 GREEN
 BLUE
 YELLOW
 หรือ RED
 """
 
+                # -------------------------
+                # CALL GEMINI
+                # -------------------------
+                response = model.generate_content([
+                    prompt,
+                    ai_image
+                ])
 
                 # -------------------------
-                # GEMINI
+                # CHECK RESPONSE
                 # -------------------------
-
-                response = model.generate_content(
-                    [prompt, ai_image]
-                )
-
-
-                # -------------------------
-                # ดึงผลลัพธ์อย่างปลอดภัย
-                # -------------------------
-
                 result = ""
 
                 try:
                     result = response.text.strip().upper()
-                except:
+                except Exception:
                     pass
 
-
-                # Debug กรณีไม่มีข้อความ
                 if not result:
-                    st.error("AI วิเคราะห์แล้ว แต่ไม่ได้ส่งผลลัพธ์กลับมา")
-                    st.write(response)
+
+                    finish_reason = "UNKNOWN"
+
+                    try:
+                        finish_reason = str(
+                            response.candidates[0].finish_reason
+                        )
+                    except Exception:
+                        pass
+
+                    st.error(
+                        f"AI ไม่ได้ส่งคำตอบกลับมา "
+                        f"(Finish reason: {finish_reason})"
+                    )
                     st.stop()
 
-
                 # -------------------------
-                # แสดงผล
+                # CLEAN RESULT
                 # -------------------------
-
                 if "GREEN" in result:
-
-                    st.success("♻️ ทิ้งถังขยะรีไซเคิล")
-
-                    st.markdown(
-                        """
-                        ### 🟢 ถังขยะรีไซเคิล
-
-                        ล้างหรือเทของเหลวออกก่อนทิ้ง หากสามารถทำได้
-                        """
-                    )
-
+                    result = "GREEN"
 
                 elif "BLUE" in result:
-
-                    st.info("🗑️ ทิ้งถังขยะทั่วไป")
-
-                    st.markdown(
-                        """
-                        ### 🔵 ถังขยะทั่วไป
-
-                        ทิ้งได้โดยไม่ต้องแยกเพื่อรีไซเคิล
-                        """
-                    )
-
+                    result = "BLUE"
 
                 elif "YELLOW" in result:
-
-                    st.warning("🍌 ทิ้งถังขยะอินทรีย์")
-
-                    st.markdown(
-                        """
-                        ### 🟡 ถังขยะอินทรีย์ / เศษอาหาร
-
-                        เทของเหลวและแยกบรรจุภัณฑ์ออกก่อน
-                        """
-                    )
-
+                    result = "YELLOW"
 
                 elif "RED" in result:
+                    result = "RED"
 
-                    st.error("⚠️ ทิ้งถังขยะอันตราย")
 
-                    st.markdown(
-                        """
-                        ### 🔴 ถังขยะอันตราย
+                # =========================
+                # DISPLAY RESULT
+                # =========================
+                st.divider()
 
-                        ห้ามทิ้งรวมกับขยะทั่วไป
-                        """
-                    )
+                if result == "GREEN":
+
+                    st.success("♻️ ต้องทิ้งถังขยะรีไซเคิล")
+
+                    st.markdown("""
+### 🟢 ถังขยะรีไซเคิล
+
+เทของเหลวออก และล้างก่อนทิ้งหากสามารถทำได้
+""")
+
+
+                elif result == "BLUE":
+
+                    st.info("🗑️ ต้องทิ้งถังขยะทั่วไป")
+
+                    st.markdown("""
+### 🔵 ถังขยะทั่วไป
+
+ทิ้งลงถังขยะทั่วไปได้
+""")
+
+
+                elif result == "YELLOW":
+
+                    st.warning("🍌 ต้องทิ้งถังขยะอินทรีย์")
+
+                    st.markdown("""
+### 🟡 ถังขยะอินทรีย์ / เศษอาหาร
+
+แยกบรรจุภัณฑ์ออกก่อนทิ้ง หากมี
+""")
+
+
+                elif result == "RED":
+
+                    st.error("⚠️ ต้องทิ้งถังขยะอันตราย")
+
+                    st.markdown("""
+### 🔴 ถังขยะอันตราย
+
+ห้ามทิ้งรวมกับขยะทั่วไป
+""")
 
 
                 else:
 
                     st.warning(
-                        f"AI ตอบกลับ: {result}"
+                        f"AI ตอบกลับมาไม่ตรงรูปแบบ: {result}"
                     )
 
 
             except Exception as e:
 
                 st.error(
-                    f"❌ Error: {e}"
+                    f"❌ เกิดข้อผิดพลาด: {str(e)}"
                 )
